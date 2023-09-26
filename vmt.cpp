@@ -103,7 +103,7 @@ bool vmt::Hook::UnhookInstance(void* p_instance) {
     if (*reinterpret_cast<uint64_t**>(p_instance) != table_array_copy_) {
         return false;
     }
-    hooked_instances_.extract(p_instance);
+    hooked_instances_.erase(p_instance);
     *reinterpret_cast<uint64_t**>(p_instance) = table_array_;
     return true;
 }
