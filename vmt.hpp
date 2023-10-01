@@ -3,9 +3,17 @@
 
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace vmt {
+
+using hash_t = size_t;
+using module_cache_t = std::unordered_multimap<hash_t, std::tuple<uint64_t*, size_t>>;
+
+inline std::unordered_map<hash_t, module_cache_t> cached_modules;
+
+void Cache(const std::string_view& module_name);
 
 std::tuple<uint64_t*, size_t> Find(const std::string_view& module_name, const std::string_view& type_name,
                                    size_t occurrence = 0);

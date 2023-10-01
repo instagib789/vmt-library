@@ -1,24 +1,27 @@
-#include "Vmt.hpp"
+#include "vmt.hpp"
 
 #include "module.hpp"
 #include "rtti.hpp"
 
-std::tuple<uint64_t*, size_t> vmt::Find(const std::string_view& module_name, const std::string_view& type_name,
-                                        size_t occurrence) {
+void vmt::Cache(const std::string_view& module_name) {
+    // Create a new entry to store the cache.
+    module_cache_t& module_cache = cached_modules[std::hash<std::string_view>()(module_name)];
+    module_cache.clear();
+
     // Get module and section information.
     auto [module_address, module_size] = module::GetModuleAddress(module_name);
     if (module_address == 0) {
-        return std::make_tuple(nullptr, 0);
+        return;
     }
     auto [text, text_size] = module::GetSectionAddress(module_address, ".text");
     auto [rdata, rdata_size] = module::GetSectionAddress(module_address, ".rdata");
     auto [data, data_size] = module::GetSectionAddress(module_address, ".data");
     if (text == 0 || rdata == 0 || data == 0) {
-        return std::make_tuple(nullptr, 0);
+        return;
     }
 
     // Lambda to check if an address is a virtual method table.
-    auto is_vmt = [&](uint64_t scan_address, std::string_view& found_type_name) {
+    auto is_vmt = [&](uint64_t scan_address, std::string_view& type_name) {
         // VTables start with an address to its CompleteObjectLocator and are followed by all its function addresses.
         uint64_t col_address = *reinterpret_cast<uint64_t*>(scan_address - sizeof(uint64_t));
         uint64_t table_address = *reinterpret_cast<uint64_t*>(scan_address);
@@ -43,30 +46,46 @@ std::tuple<uint64_t*, size_t> vmt::Find(const std::string_view& module_name, con
             return false;
         }
 
-        found_type_name = std::string_view(td->type_name);
+        type_name = std::string_view(td->type_name);
         return true;
     };
 
     // Search all .rdata section for vtable with type_name.
-    size_t found_occurrence = 0;
     for (uint64_t scan_address = rdata; scan_address < rdata + rdata_size; scan_address += 8) {
-        std::string_view found_type_name;
-        if (is_vmt(scan_address, found_type_name)) {
-            // Compare the found type_name.
-            if (type_name.compare(found_type_name) == 0) {
-                // It's a match! Now check occurrence and find the table size.
-                if (occurrence == found_occurrence) {
-                    uint64_t table_address = scan_address;
-                    size_t table_size = 0;
-                    while (*reinterpret_cast<uint64_t*>(scan_address) >= text &&
-                           *reinterpret_cast<uint64_t*>(scan_address) < text + text_size) {
-                        ++table_size;
-                        scan_address += 8;
-                    }
-                    return std::make_tuple(reinterpret_cast<uint64_t*>(table_address), table_size);
-                }
-                ++found_occurrence;
+        std::string_view type_name;
+        if (is_vmt(scan_address, type_name)) {
+            uint64_t table_address = scan_address;
+            size_t table_size = 0;
+            while (*reinterpret_cast<uint64_t*>(scan_address) >= text &&
+                   *reinterpret_cast<uint64_t*>(scan_address) < text + text_size) {
+                ++table_size;
+                scan_address += 8;
             }
+            module_cache.emplace(std::hash<std::string_view>()(type_name),
+                                 std::make_tuple(reinterpret_cast<uint64_t*>(table_address), table_size));
+        }
+    }
+}
+
+std::tuple<uint64_t*, size_t> vmt::Find(const std::string_view& module_name, const std::string_view& type_name,
+                                        size_t occurrence) {
+    // Check if the module is in our cache, if it's not add it.
+    hash_t module_hash = std::hash<std::string_view>()(module_name);
+    if (!cached_modules.contains(module_hash)) {
+        Cache(module_name);
+    }
+
+    module_cache_t& module_cache = cached_modules[module_hash];
+    hash_t type_hash = std::hash<std::string_view>()(type_name);
+
+    // Search the module cache for the table information.
+    size_t found_occurrence = 0;
+    for (const auto& [found_type_hash, table] : module_cache) {
+        if (type_hash == found_type_hash) {
+            if (occurrence == found_occurrence) {
+                return table;
+            }
+            ++found_occurrence;
         }
     }
     return std::make_tuple(nullptr, 0);
